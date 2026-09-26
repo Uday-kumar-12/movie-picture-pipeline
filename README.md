@@ -270,7 +270,7 @@ docker run -d -p 5000:5000 --name mp-backend-app mp-backend:test
 Infrastructure is defined in `setup/terraform/` using HashiCorp Terraform:
 - **VPC & Networking**: Multi-AZ VPC with public and private subnets, Internet Gateway, and NAT Gateway.
 - **Amazon ECR**: Repositories for `movie-picture-frontend` and `movie-picture-backend` with automated scan-on-push and lifecycle expiration policies.
-- **Amazon EKS**: EKS Cluster version 1.29 and managed worker node groups with auto-scaling.
+- **Amazon EKS**: EKS Cluster version 1.32 and managed worker node groups with auto-scaling.
 - **IAM Security**: Dedicated IAM user and policy for GitHub Actions CI/CD with least-privilege permissions without hard-coded account IDs.
 
 ### Outputs:
