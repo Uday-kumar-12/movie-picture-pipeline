@@ -4,10 +4,10 @@ FROM node:18-alpine AS builder
 WORKDIR /app
 
 # Copy dependency specifications
-COPY package.json package-lock.json* ./
+COPY package.json package-lock.json ./
 
-# Install dependencies
-RUN npm ci || npm install
+# Install dependencies strictly from lockfile
+RUN npm ci
 
 # Build argument for API URL
 ARG REACT_APP_MOVIE_API_URL=http://localhost:5000

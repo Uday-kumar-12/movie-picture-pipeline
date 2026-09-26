@@ -96,8 +96,8 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Kustomize
-        uses: imranismail/setup-kustomize@v3
+      - name: Verify Kustomize
+        run: kustomize version
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -111,8 +111,8 @@ jobs:
           aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
 
       - name: Deploy with Kustomize
-        working-directory: ./backend/k8s
         run: |
+          cd backend/k8s
           kustomize edit set image backend=${{ secrets.ECR_BACKEND_REPOSITORY }}:${{ github.sha }}
           kustomize build | kubectl apply -f -
           kubectl rollout status deployment/backend-deployment --timeout=180s

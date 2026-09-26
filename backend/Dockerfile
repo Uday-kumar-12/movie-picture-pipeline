@@ -10,8 +10,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Install dependencies
 RUN pip install --no-cache-dir pipenv
 
-COPY Pipfile Pipfile.lock* ./
-RUN pipenv install --system --deploy || pipenv install --system --skip-lock
+COPY Pipfile Pipfile.lock ./
+RUN pipenv install --system --deploy
 
 # Copy application code
 COPY movies/ ./movies/

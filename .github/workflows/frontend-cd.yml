@@ -80,25 +80,26 @@ jobs:
       - name: Resolve Backend Public Endpoint
         id: resolve-endpoint
         run: |
+          kubectl get svc backend-service
           BACKEND_HOST=""
           for i in {1..30}; do
-            BACKEND_HOST=$(kubectl get svc backend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+            BACKEND_HOST=$(kubectl get svc backend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
             if [ -z "$BACKEND_HOST" ]; then
-              BACKEND_HOST=$(kubectl get svc backend-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+              BACKEND_HOST=$(kubectl get svc backend-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
             fi
             if [ -n "$BACKEND_HOST" ]; then
               break
             fi
-            echo "Waiting for backend LoadBalancer endpoint... ($i/30)"
+            echo "Waiting for backend LoadBalancer external endpoint... ($i/30)"
             sleep 5
           done
 
-          if [ -n "$BACKEND_HOST" ]; then
-            RESOLVED_URL="http://${BACKEND_HOST}:5000"
-          else
-            echo "Notice: External LoadBalancer endpoint pending, using internal backend service"
-            RESOLVED_URL="http://backend-service:5000"
+          if [ -z "$BACKEND_HOST" ]; then
+            echo "Error: Failed to obtain an externally reachable LoadBalancer endpoint for backend-service." >&2
+            exit 1
           fi
+
+          RESOLVED_URL="http://${BACKEND_HOST}:5000"
           echo "api_url=$RESOLVED_URL" >> $GITHUB_OUTPUT
           echo "Resolved backend API URL: $RESOLVED_URL"
 
@@ -112,12 +113,12 @@ jobs:
           IMAGE_TAG="${{ github.sha }}"
           ECR_REPO="${{ secrets.ECR_FRONTEND_REPOSITORY }}"
           API_URL="${{ steps.resolve-endpoint.outputs.api_url }}"
-          
+
           docker build \
             --build-arg REACT_APP_MOVIE_API_URL="$API_URL" \
             -t "$ECR_REPO:$IMAGE_TAG" \
             .
-            
+
           docker push "$ECR_REPO:$IMAGE_TAG"
 
   deploy:
@@ -129,8 +130,8 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Kustomize
-        uses: imranismail/setup-kustomize@v3
+      - name: Verify Kustomize
+        run: kustomize version
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -144,8 +145,8 @@ jobs:
           aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
 
       - name: Deploy with Kustomize
-        working-directory: ./frontend/k8s
         run: |
+          cd frontend/k8s
           kustomize edit set image frontend=${{ secrets.ECR_FRONTEND_REPOSITORY }}:${{ github.sha }}
           kustomize build | kubectl apply -f -
           kubectl rollout status deployment/frontend-deployment --timeout=180s
