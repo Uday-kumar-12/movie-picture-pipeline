@@ -3,6 +3,7 @@ data "aws_region" "current" {}
 
 # Policy for GitHub Actions deployment
 resource "aws_iam_policy" "github_actions_policy" {
+  provider    = aws.iam_no_tags
   name        = "${var.cluster_name}-github-actions-policy"
   description = "IAM policy granting GitHub Actions permission to push ECR images and deploy to EKS"
 
@@ -51,11 +52,8 @@ resource "aws_iam_policy" "github_actions_policy" {
 
 # Dedicated IAM user for GitHub Actions CI/CD pipeline
 resource "aws_iam_user" "github_actions" {
-  name = "${var.cluster_name}-github-actions-deployer"
-
-  tags = {
-    Name = "GitHub Actions CI/CD User"
-  }
+  provider = aws.iam_no_tags
+  name     = "${var.cluster_name}-github-actions-deployer"
 }
 
 resource "aws_iam_user_policy_attachment" "github_actions_attach" {

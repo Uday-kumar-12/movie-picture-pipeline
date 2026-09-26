@@ -51,6 +51,7 @@ resource "aws_eks_cluster" "main" {
 
 # Grant Kubernetes cluster-admin access to the GitHub Actions IAM user
 resource "aws_eks_access_entry" "github_actions" {
+  provider      = aws.iam_no_tags
   cluster_name  = aws_eks_cluster.main.name
   principal_arn = aws_iam_user.github_actions.arn
   type          = "STANDARD"
