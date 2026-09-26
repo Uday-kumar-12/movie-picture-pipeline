@@ -1,0 +1,151 @@
+name: Frontend CD
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'frontend/**'
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Lint Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: 'frontend/.nvmrc'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install Dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: ./frontend
+        run: npm run lint
+
+  test:
+    name: Test Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: 'frontend/.nvmrc'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install Dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run Tests
+        working-directory: ./frontend
+        run: CI=true npm test -- --watchAll=false
+
+  build:
+    name: Build & Push Frontend Image
+    needs:
+      - lint
+      - test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Configure EKS Kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+      - name: Resolve Backend Public Endpoint
+        id: resolve-endpoint
+        run: |
+          BACKEND_HOST=""
+          for i in {1..30}; do
+            BACKEND_HOST=$(kubectl get svc backend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+            if [ -z "$BACKEND_HOST" ]; then
+              BACKEND_HOST=$(kubectl get svc backend-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+            fi
+            if [ -n "$BACKEND_HOST" ]; then
+              break
+            fi
+            echo "Waiting for backend LoadBalancer endpoint... ($i/30)"
+            sleep 5
+          done
+
+          if [ -n "$BACKEND_HOST" ]; then
+            RESOLVED_URL="http://${BACKEND_HOST}:5000"
+          else
+            echo "Notice: External LoadBalancer endpoint pending, using internal backend service"
+            RESOLVED_URL="http://backend-service:5000"
+          fi
+          echo "api_url=$RESOLVED_URL" >> $GITHUB_OUTPUT
+          echo "Resolved backend API URL: $RESOLVED_URL"
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push Frontend Docker Image
+        working-directory: ./frontend
+        run: |
+          IMAGE_TAG="${{ github.sha }}"
+          ECR_REPO="${{ secrets.ECR_FRONTEND_REPOSITORY }}"
+          API_URL="${{ steps.resolve-endpoint.outputs.api_url }}"
+          
+          docker build \
+            --build-arg REACT_APP_MOVIE_API_URL="$API_URL" \
+            -t "$ECR_REPO:$IMAGE_TAG" \
+            .
+            
+          docker push "$ECR_REPO:$IMAGE_TAG"
+
+  deploy:
+    name: Deploy Frontend to EKS
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Kustomize
+        uses: imranismail/setup-kustomize@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Configure EKS Kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+      - name: Deploy with Kustomize
+        working-directory: ./frontend/k8s
+        run: |
+          kustomize edit set image frontend=${{ secrets.ECR_FRONTEND_REPOSITORY }}:${{ github.sha }}
+          kustomize build | kubectl apply -f -
+          kubectl rollout status deployment/frontend-deployment --timeout=180s
