@@ -1,11 +1,9 @@
-name: Backend CD
+name: Backend Continuous Deployment
 
 on:
   push:
     branches:
       - main
-    paths:
-      - 'backend/**'
   workflow_dispatch:
 
 jobs:
@@ -13,7 +11,7 @@ jobs:
     name: Lint Backend
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -21,14 +19,22 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: Cache Pipenv virtualenv
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/virtualenvs
+          key: ${{ runner.os }}-pipenv-${{ hashFiles('backend/Pipfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pipenv-
+
       - name: Install Pipenv
         run: pip install pipenv
 
-      - name: Install Dependencies
+      - name: Install dependencies
         working-directory: ./backend
         run: pipenv install --dev
 
-      - name: Run Linter
+      - name: Run linter
         working-directory: ./backend
         run: pipenv run lint
 
@@ -36,7 +42,7 @@ jobs:
     name: Test Backend
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -44,25 +50,33 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: Cache Pipenv virtualenv
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/virtualenvs
+          key: ${{ runner.os }}-pipenv-${{ hashFiles('backend/Pipfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pipenv-
+
       - name: Install Pipenv
         run: pip install pipenv
 
-      - name: Install Dependencies
+      - name: Install dependencies
         working-directory: ./backend
         run: pipenv install --dev
 
-      - name: Run Tests
+      - name: Run tests
         working-directory: ./backend
         run: pipenv run test
 
-  build:
-    name: Build & Push Backend Image
+  build-and-deploy:
+    name: Build, Push & Deploy Backend
     needs:
       - lint
       - test
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
@@ -78,39 +92,32 @@ jobs:
       - name: Log in to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
 
-      - name: Build and Push Backend Docker Image
+      - name: Build application using Docker
         working-directory: ./backend
         run: |
           IMAGE_TAG="${{ github.sha }}"
           ECR_REPO="${{ secrets.ECR_BACKEND_REPOSITORY }}"
           docker build -t "$ECR_REPO:$IMAGE_TAG" .
+
+      - name: Push Docker image to ECR
+        working-directory: ./backend
+        run: |
+          IMAGE_TAG="${{ github.sha }}"
+          ECR_REPO="${{ secrets.ECR_BACKEND_REPOSITORY }}"
           docker push "$ECR_REPO:$IMAGE_TAG"
 
-  deploy:
-    name: Deploy Backend to EKS
-    needs:
-      - build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Verify Kustomize
-        run: kustomize version
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Setup EKS Kubeconfig
+        uses: ./.github/actions/setup-eks-kubectl
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
+          cluster-name: ${{ secrets.EKS_CLUSTER_NAME }}
 
-      - name: Configure EKS Kubeconfig
-        run: |
-          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
-
-      - name: Deploy with Kustomize
+      - name: Deploy application using kubectl to Kubernetes cluster
         run: |
           cd backend/k8s
           kustomize edit set image backend=${{ secrets.ECR_BACKEND_REPOSITORY }}:${{ github.sha }}

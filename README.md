@@ -105,11 +105,14 @@ movie-picture-pipeline/
 │   └── init.sh
 │
 ├── .github/
+│   ├── actions/
+│   │   └── setup-eks-kubectl/
+│   │       └── action.yaml
 │   └── workflows/
-│       ├── frontend-ci.yml
-│       ├── frontend-cd.yml
-│       ├── backend-ci.yml
-│       └── backend-cd.yml
+│       ├── frontend-ci.yaml
+│       ├── frontend-cd.yaml
+│       ├── backend-ci.yaml
+│       └── backend-cd.yaml
 │
 ├── .gitignore
 ├── LICENSE.md
@@ -225,38 +228,36 @@ docker run -d -p 5000:5000 --name mp-backend-app mp-backend:test
 
 ## CI/CD Automation (GitHub Actions)
 
-### 1. Frontend CI (`.github/workflows/frontend-ci.yml`)
-- **Trigger**: Pull Requests to `main` modifying `frontend/**`, or manual `workflow_dispatch`.
+### 1. Frontend Continuous Integration (`.github/workflows/frontend-ci.yaml`)
+- **Trigger**: Pull Requests to `main`, or manual `workflow_dispatch`.
 - **Jobs**:
-  - `lint`: Runs ESLint on frontend code.
-  - `test`: Runs Jest tests via `CI=true npm test -- --watchAll=false`.
-  - `build`: Requires `[lint, test]` (will NOT run if either fails). Builds Docker image using `--build-arg REACT_APP_MOVIE_API_URL`.
+  - `lint`: Checks out code, sets up Node.js, caches npm dependencies (`actions/cache@v4`), installs dependencies (`npm ci`), and runs `npm run lint`.
+  - `test`: Runs in parallel with `lint`. Checks out code, sets up Node.js, caches npm dependencies (`actions/cache@v4`), installs dependencies (`npm ci`), and runs `npm run test`.
+  - `build`: Requires `[lint, test]` (will NOT run if either fails). Runs tests, builds Docker image using `--build-arg REACT_APP_MOVIE_API_URL`, and posts a status comment on the Pull Request.
 
-### 2. Backend CI (`.github/workflows/backend-ci.yml`)
-- **Trigger**: Pull Requests to `main` modifying `backend/**`, or manual `workflow_dispatch`.
+### 2. Backend Continuous Integration (`.github/workflows/backend-ci.yaml`)
+- **Trigger**: Pull Requests to `main`, or manual `workflow_dispatch`.
 - **Jobs**:
-  - `lint`: Runs `pipenv run lint` (flake8).
-  - `test`: Runs `pipenv run test` (pytest).
-  - `build`: Requires `[lint, test]`. Builds backend Docker image.
+  - `lint`: Caches Pipenv virtualenvs (`actions/cache@v4`) and runs `pipenv run lint` (flake8).
+  - `test`: Runs in parallel with `lint`. Caches Pipenv virtualenvs and runs `pipenv run test` (pytest).
+  - `build`: Requires `[lint, test]`. Builds backend Docker image and posts a status comment on the Pull Request.
 
-### 3. Frontend CD (`.github/workflows/frontend-cd.yml`)
-- **Trigger**: Push to `main` modifying `frontend/**`, or manual `workflow_dispatch`.
+### 3. Frontend Continuous Deployment (`.github/workflows/frontend-cd.yaml`)
+- **Trigger**: Push/merge to `main`, or manual `workflow_dispatch`.
 - **Jobs**:
-  - `lint` & `test`: Run independently.
-  - `build`: Requires `[lint, test]`. Dynamically resolves the active EKS backend LoadBalancer endpoint, injects it into `--build-arg REACT_APP_MOVIE_API_URL`, builds and tags image with `${{ github.sha }}`, and pushes to Amazon ECR.
-  - `deploy`: Requires `[build]`. Uses Kustomize to update the image tag with Git SHA and deploys to EKS:
+  - `lint` & `test`: Run in parallel with dependency caching.
+  - `build-and-deploy`: Requires `[lint, test]`. Uses our custom composite action (`.github/actions/setup-eks-kubectl`), dynamically resolves the active EKS backend LoadBalancer endpoint, logs in to ECR via `aws-actions/amazon-ecr-login@v2`, builds Docker image with `--build-arg REACT_APP_MOVIE_API_URL`, pushes to Amazon ECR, and deploys to EKS using Kustomize and `kubectl`:
     ```bash
     cd frontend/k8s
     kustomize edit set image frontend=<ECR_REPO>:${{ github.sha }}
     kustomize build | kubectl apply -f -
     ```
 
-### 4. Backend CD (`.github/workflows/backend-cd.yml`)
-- **Trigger**: Push to `main` modifying `backend/**`, or manual `workflow_dispatch`.
+### 4. Backend Continuous Deployment (`.github/workflows/backend-cd.yaml`)
+- **Trigger**: Push/merge to `main`, or manual `workflow_dispatch`.
 - **Jobs**:
-  - `lint` & `test`: Run independently.
-  - `build`: Requires `[lint, test]`. Builds Docker image, tags with `${{ github.sha }}`, and pushes to Amazon ECR.
-  - `deploy`: Requires `[build]`. Deploys via Kustomize to EKS:
+  - `lint` & `test`: Run in parallel with dependency caching.
+  - `build-and-deploy`: Requires `[lint, test]`. Logs in to ECR via `aws-actions/amazon-ecr-login@v2`, builds Docker image, tags with `${{ github.sha }}`, pushes to Amazon ECR, configures EKS via `.github/actions/setup-eks-kubectl`, and deploys via Kustomize and `kubectl` to EKS:
     ```bash
     cd backend/k8s
     kustomize edit set image backend=<ECR_REPO>:${{ github.sha }}

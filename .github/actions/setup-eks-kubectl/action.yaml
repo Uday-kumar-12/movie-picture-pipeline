@@ -1,0 +1,23 @@
+name: 'Setup EKS Kubeconfig and Tools'
+description: 'Reusable composite action to verify Kubernetes deployment tools and configure EKS kubeconfig'
+inputs:
+  aws-region:
+    description: 'AWS Region where the EKS cluster is deployed'
+    required: true
+  cluster-name:
+    description: 'Name of the Amazon EKS cluster'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Verify Kustomize and Kubectl
+      shell: bash
+      run: |
+        kustomize version
+        kubectl version --client
+
+    - name: Update EKS Kubeconfig
+      shell: bash
+      run: |
+        aws eks update-kubeconfig --region "${{ inputs.aws-region }}" --name "${{ inputs.cluster-name }}"
